@@ -1,0 +1,181 @@
+import sys
+import argparse
+import re
+from Bio import SeqIO
+from collections import defaultdict
+
+def load_sequences (fastafile):
+    fasta_sequences = SeqIO.parse(open(fastafile),'fasta')
+    hSeq = {}
+    hMap = defaultdict(list)
+    for fasta in fasta_sequences:
+        name, seq = fasta.id, str(fasta.seq)
+        b = name.split('_')
+        if (b[2] == '' or b[0].startswith('NR_')):
+            continue
+        ref = b[0] + "_" + b[1]
+        st = int(b[2])
+        en = int(b[3])
+        for k in range(0, en - st, 3):
+            hMap[name].append(0)
+        hSeq[name] = seq
+
+    return hSeq, hMap
+
+def load_refToSym (reffile):
+    with open(reffile, 'rt') as infile:
+        hRef = {}
+        for l in infile:
+            l = re.sub('\s+$', '', l)
+            a = l.split('\t')
+            hRef[a[1]] = a[0]
+
+    return hRef
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("fastafile", help="mRNA sequence with ID showing start and end of CDS with _", type=str)
+    parser.add_argument("refToSym", help="file mapping gene symbols to RefSeq IDs", type=str)
+    parser.add_argument("bedfile", help="ribosome footprint", type=str)
+    parser.add_argument("offsetparam", help="offset parameters", type=str)
+    parser.add_argument("--pos15", help="map A site (15nt shift)", dest='pos15', action='store_true')
+    args = parser.parse_args()
+
+    shift=0
+    if (args.pos15):
+        shift=3
+
+    hSeq, hMap = load_sequences(args.fastafile)
+    hRef = load_refToSym(args.refToSym)
+
+    offsets = {}
+    with open(args.offsetparam, 'rt') as offsetfile:
+        for l in offsetfile:
+            l = re.sub('\s+$', '', l)
+            a = l.split('\t')
+            offsets[a[0]] = int(a[1])
+
+    #NM_001190452_951_1026
+    cnt = 0
+    with open(args.bedfile, 'rt') as infile:
+        for l in infile:
+            l = re.sub('\s+$', '', l)
+            a = l.split('\t')
+            name = a[0]
+            b = name.split('_')
+            if (b[2] == '' or b[0].startswith('NR_')):
+                continue
+            ref = b[0] + "_" + b[1]
+            st = int(b[2])
+            en = int(b[3])
+            a[1] = int(a[1])
+            a[2] = int(a[2])
+            length = a[2]-a[1]
+            if (not (str(length) in offsets)):
+                continue
+
+            dist_from_start = a[1] - st
+            dist_from_end = a[1] - en
+
+            offset = offsets[str(length)]+shift
+            
+
+            index = int ((a[1]+offset - st)/3)
+            cdslen = int((en-st)/3)
+            if (index<0 or index>=cdslen):
+                continue
+            hMap[name][index] += 1
+            if (cnt%100000==0):
+                sys.stdout.write('.')
+                sys.stdout.flush()
+            cnt+=1
+
+    infile.close()
+    #print(hSeq['NM_001190452_951_1026'])
+    #print(hMap['NM_001190452_951_1026'])
+    #name = 'NM_001190452_951_1026'
+    #b = name.split('_')
+    #ref = b[0] + "_" + b[1]
+    #st = int(b[2])
+    #en = int(b[3])
+    #gene = hRef[ref]
+    #sys.stdout.write(gene)
+    #seq = hSeq[name]
+    #for k in range(0, en - st, 3):
+    #    sys.stdout.write("\t" + seq[st + k:st + k + 3])
+    #exit(0)
+
+    gencode = {
+        'ATA': 'I', 'ATC': 'I', 'ATT': 'I', 'ATG': 'M',
+        'ACA': 'T', 'ACC': 'T', 'ACG': 'T', 'ACT': 'T',
+        'AAC': 'N', 'AAT': 'N', 'AAA': 'K', 'AAG': 'K',
+        'AGC': 'S', 'AGT': 'S', 'AGA': 'R', 'AGG': 'R',
+        'CTA': 'L', 'CTC': 'L', 'CTG': 'L', 'CTT': 'L',
+        'CCA': 'P', 'CCC': 'P', 'CCG': 'P', 'CCT': 'P',
+        'CAC': 'H', 'CAT': 'H', 'CAA': 'Q', 'CAG': 'Q',
+        'CGA': 'R', 'CGC': 'R', 'CGG': 'R', 'CGT': 'R',
+        'GTA': 'V', 'GTC': 'V', 'GTG': 'V', 'GTT': 'V',
+        'GCA': 'A', 'GCC': 'A', 'GCG': 'A', 'GCT': 'A',
+        'GAC': 'D', 'GAT': 'D', 'GAA': 'E', 'GAG': 'E',
+        'GGA': 'G', 'GGC': 'G', 'GGG': 'G', 'GGT': 'G',
+        'TCA': 'S', 'TCC': 'S', 'TCG': 'S', 'TCT': 'S',
+        'TTC': 'F', 'TTT': 'F', 'TTA': 'L', 'TTG': 'L',
+        'TAC': 'Y', 'TAT': 'Y', 'TAA': '_', 'TAG': '_',
+        'TGC': 'C', 'TGT': 'C', 'TGA': '_', 'TGG': 'W'}
+    countTable = defaultdict(dict)
+    for name in hSeq:
+        #print name, hMap[name]
+        b = name.split('_')
+        ref = b[0] + "_" + b[1]
+        st = int(b[2])
+        en = int(b[3])
+        gene = hRef[ref]
+        if not(gene in countTable):
+            for codon in gencode:
+                countTable[gene][codon]=0
+        seq = hSeq[name]
+        for i, k in enumerate(range(0, en - st, 3)):
+            codon = seq[st+k:st+k+3]
+            if codon in gencode:
+                #sys.stdout.write(codon+" ")
+                countTable[gene][codon] += hMap[name][i]
+        #sys.stdout.write('\n')
+
+    outfile1 = ""
+    outfile2 = ""
+    outfile3 = ""
+    if (args.pos15):
+        outfile1 = re.sub('.bed$','.codons.pos15.txt', args.bedfile)
+        outfile2 = re.sub('.bed$','.codon-reads.pos15.txt', args.bedfile)
+        outfile3 = re.sub('.bed$','.codon-table.pos15.txt', args.bedfile)
+    else:
+        outfile1 = re.sub('.bed$','.codons.pos12.txt', args.bedfile)
+        outfile2 = re.sub('.bed$','.codon-reads.pos12.txt', args.bedfile)
+        outfile3 = re.sub('.bed$','.codon-table.pos12.txt', args.bedfile)
+        
+    with open(outfile1, 'wt') as out1, open(outfile2, 'wt') as out2, open(outfile3, 'wt') as out3:
+        for c in gencode:
+            out3.write("\t"+c)
+        out3.write("\n")
+
+        for name in hSeq:
+            #print name, hMap[name]
+            b = name.split('_')
+            ref = b[0] + "_" + b[1]
+            st = int(b[2])
+            en = int(b[3])
+            gene = hRef[ref]
+            out1.write(gene)
+            out2.write(gene)
+            out3.write(gene)
+            seq = hSeq[name]
+            for k in range(0, en-st, 3):
+                out1.write("\t"+seq[st+k:st+k+3])
+            out2.write("\t"+"\t".join(str(x) for x in hMap[name]))
+            for c in gencode:
+                out3.write("\t" + str(countTable[gene][c]))
+            out1.write("\n")
+            out2.write("\n")
+            out3.write("\n")
+    out1.close()
+    out2.close()
